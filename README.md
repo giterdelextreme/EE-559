@@ -10,3 +10,10 @@
 Detecting Emoji-based Hate](https://github.com/HannahKirk/Hatemoji)
 
 - [Automated Hate Speech Detection and the Problem of Offensive Language](https://github.com/t-davidson/hate-speech-and-offensive-language/tree/master)
+
+
+## TODO:
+- [ ] early stopping + patience
+- [ ] tester l'autre modèle sur l'autre dataset
+- [ ] learning rates
+- [ ] 10 seeds pour moyenne des perfs
