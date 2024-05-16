@@ -151,20 +151,19 @@ all_val_losses = {}
 N_EPOCHS = 20
 tokenizer = AutoTokenizer.from_pretrained("mnaylor/mega-base-wikitext")
 
-lr_rates = []
+lr_rates = [1e-6, 5e-6, 5e-5, 1e-4, 5e-4, 1e-3]
 
 N_SEEDS = 5
 for lr in lr_rates:
-    print(scheduler_name)
-    best_train_accs[scheduler_name] = []
-    best_val_accs[scheduler_name] = []
-    best_train_losses[scheduler_name] = []
-    best_val_losses[scheduler_name] = []
-    best_epochs[scheduler_name] = []
-    all_train_accs[scheduler_name] = []
-    all_train_losses[scheduler_name] = []
-    all_val_accs[scheduler_name] = []
-    all_val_losses[scheduler_name] = []
+    best_train_accs[lr] = []
+    best_val_accs[lr] = []
+    best_train_losses[lr] = []
+    best_val_losses[lr] = []
+    best_epochs[lr] = []
+    all_train_accs[lr] = []
+    all_train_losses[lr] = []
+    all_val_accs[lr] = []
+    all_val_losses[lr] = []
     for seed in tqdm(range(N_SEEDS)):
         model = MegaForSequenceClassification.from_pretrained("mnaylor/mega-base-wikitext")
         model.classifier.out_proj = torch.nn.Linear(in_features=128, out_features=3, bias=True)
@@ -182,22 +181,22 @@ for lr in lr_rates:
         test_dataloader = DataLoader(tokenized_data['test'], batch_size=8)
 
 
-        optimizer = AdamW(model.parameters(), lr=5e-5)
-        scheduler = get_scheduler(name="linear", optimizer=optimizer, num_warmup_steps=1, num_training_steps=N_EPOCHS*len(train_dataloader))
-        train_acc, val_acc, train_losses, val_losses, best_epoch, _ = train(model, train_dataloader, test_dataloader, optimizer, scheduler,num_epochs=N_EPOCHS, learning_rate=5e-5)
+        optimizer = AdamW(model.parameters(), lr=lr)
+        scheduler = get_scheduler(name="polynomial", optimizer=optimizer, num_warmup_steps=1, num_training_steps=N_EPOCHS*len(train_dataloader))
+        train_acc, val_acc, train_losses, val_losses, best_epoch, _ = train(model, train_dataloader, test_dataloader, optimizer, scheduler,num_epochs=N_EPOCHS)
 
-        best_train_accs[scheduler_name].append(train_acc[best_epoch])
-        best_val_accs[scheduler_name].append(val_acc[best_epoch])
-        best_train_losses[scheduler_name].append(train_losses[best_epoch])
-        best_val_losses[scheduler_name].append(val_losses[best_epoch])
-        best_epochs[scheduler_name].append(best_epoch)
+        best_train_accs[lr].append(train_acc[best_epoch])
+        best_val_accs[lr].append(val_acc[best_epoch])
+        best_train_losses[lr].append(train_losses[best_epoch])
+        best_val_losses[lr].append(val_losses[best_epoch])
+        best_epochs[lr].append(best_epoch)
 
-        all_train_accs[scheduler_name].append(train_acc)
-        all_train_losses[scheduler_name].append(train_losses)
-        all_val_accs[scheduler_name].append(val_acc)
-        all_val_losses[scheduler_name].append(val_losses)
+        all_train_accs[lr].append(train_acc)
+        all_train_losses[lr].append(train_losses)
+        all_val_accs[lr].append(val_acc)
+        all_val_losses[lr].append(val_losses)
 
 
 save_all = (best_train_accs, best_val_accs, best_train_losses, best_val_losses, best_epochs, all_train_accs, all_train_losses, all_val_accs, all_val_losses)
-with open(f"save.obj", 'wb') as f:
+with open(f"lrsave.obj", 'wb') as f:
     pickle.dump(save_all, f)
