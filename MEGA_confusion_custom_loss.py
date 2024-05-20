@@ -7,13 +7,12 @@ from transformers import AutoTokenizer, MegaForSequenceClassification, get_sched
 import torchinfo
 from tqdm.auto import tqdm
 import evaluate
+from sklearn.metrics import ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 from torch.optim import AdamW
 import pickle
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print("Printing device :")
-print(device)
 
 
 def tokenize_func(examples):
@@ -54,11 +53,13 @@ def train_epoch(model, train_dataloader, optimizer, lr_scheduler):
 
     return epoch_loss, accuracy
 
-def eval(model, test_dataloader):
+def eval(model, test_dataloader, criterion, lam, seed, epoch):
     progress_bar = tqdm(range(len(test_dataloader)))
     metric = evaluate.load("accuracy")
     model.eval()
-    criterion = torch.nn.CrossEntropyLoss()
+    confusion_metric = evaluate.load("confusion_matrix")
+
+    #criterion = torch.nn.CrossEntropyLoss()
 
     epoch_loss = 0
     for batch in test_dataloader:
@@ -71,27 +72,42 @@ def eval(model, test_dataloader):
             outputs = model(input, attention_mask=mask)
 
         logits = outputs.logits
-        loss = criterion(outputs.logits, y)
+        #loss = criterion(outputs.logits, y)
+        loss = criterion(outputs.logits, y, lam)
 
         predictions = torch.argmax(logits, dim=-1)
 
         metric.add_batch(predictions=predictions, references=y)
+        confusion_metric.add_batch(predictions=predictions, references=y)
+
 
         epoch_loss += loss.item()
         progress_bar.update(1)
 
     epoch_loss /= len(test_dataloader)
     accuracy = metric.compute()['accuracy']
+    confusion_matrix = confusion_metric.compute()["confusion_matrix"]
+
+
+    confusion_matrix = np.array(confusion_matrix)
+    confusion_matrix_normalized = confusion_matrix.astype('float') / confusion_matrix.sum(axis=1)[:, np.newaxis]
+
+    disp = ConfusionMatrixDisplay(confusion_matrix=confusion_matrix_normalized, display_labels=('hate','offensive','neither'))
+    disp.plot(cmap=plt.cm.binary)
+
+    plt.savefig(f"matrix_{seed}_{lam}_{epoch}.png", dpi=300, bbox_inches='tight')
     
     return epoch_loss, accuracy
 
 def train(model,
           train_dataloader,
           test_dataloader,
+          criterion,
           optimizer,
           lr_scheduler,
           num_epochs=2,
-          patience=4):
+          patience=4,
+          seed = 1):
 
     # count epochs where the model didn't improve
     counter = 0
@@ -110,7 +126,7 @@ def train(model,
             model.mega.requires_grad_(True)
         train_loss, train_acc = train_epoch(
             model, train_dataloader, optimizer, lr_scheduler)
-        val_loss, val_acc = eval(model, test_dataloader)
+        val_loss, val_acc = eval(model, test_dataloader, criterion, lam, seed, epoch)
 
         print(f"Epoch {epoch+1} accuracy: train={train_acc:.3f}, test={val_acc:.3f}")
 
@@ -134,6 +150,36 @@ def train(model,
 
     return train_accuracies, val_accuracies, train_losses, val_losses, best_epoch, best_model
 
+def custom_loss(input, target, lam):
+    with torch.no_grad():
+        _, preds = torch.max(input, 1)
+    
+        # Mask for the conditions
+        mask_pred2 = (preds == 2) & ((target == 0) | (target == 1)) # most critic, we predict nothing and there is hate/offensive speech
+        #mask_pred1 = (preds == 1) & (target == 2) # we predict offensiv but there is hate
+        #mask_else = ~(mask_pred2 | mask_pred1) # other cases
+        mask_else = ~mask_pred2
+        
+        is_empty_pred2 = torch.all(~mask_pred2).to(device)
+        #is_empty_pred1 = torch.all(~mask_pred1).to(device)
+        is_empty_else = torch.all(~mask_else).to(device)
+
+    loss = torch.tensor(0.0).to(device)
+
+    if not is_empty_pred2:
+        loss_pred2 = lam * torch.sum(torch.nn.CrossEntropyLoss()(input[mask_pred2], target[mask_pred2])).to(device)
+        loss += loss_pred2
+
+    #if not is_empty_pred1:
+    #    loss_pred1 = lam/2 * torch.sum(torch.nn.CrossEntropyLoss()(input[mask_pred1], target[mask_pred1])).to(device)
+    #    loss += loss_pred1
+
+    if not is_empty_else:
+        loss_else = torch.sum(torch.nn.CrossEntropyLoss()(input[mask_else], target[mask_else])).to(device)
+        loss += loss_else
+
+    return loss
+
 
 
 best_train_accs = {}
@@ -150,20 +196,23 @@ all_val_losses = {}
 
 N_EPOCHS = 20
 tokenizer = AutoTokenizer.from_pretrained("mnaylor/mega-base-wikitext")
+criterion = custom_loss
 
-lr_rates = [1e-6, 5e-6, 5e-5, 1e-4, 5e-4, 1e-3]
-
+lr = 1e-4
+#lambdas = [1.5, 2, 5, 10]
+lambdas = 1
 N_SEEDS = 5
-for lr in lr_rates:
-    best_train_accs[lr] = []
-    best_val_accs[lr] = []
-    best_train_losses[lr] = []
-    best_val_losses[lr] = []
-    best_epochs[lr] = []
-    all_train_accs[lr] = []
-    all_train_losses[lr] = []
-    all_val_accs[lr] = []
-    all_val_losses[lr] = []
+for lam in reversed(lambdas):
+    best_train_accs[f"lam_{lam}"] = []
+    best_val_accs[f"lam_{lam}"] = []
+    best_train_losses[f"lam_{lam}"] = []
+    best_val_losses[f"lam_{lam}"] = []
+    best_epochs[f"lam_{lam}"] = []
+
+    all_train_accs[f"lam_{lam}"] = []
+    all_train_losses[f"lam_{lam}"] = []
+    all_val_accs[f"lam_{lam}"] = []
+    all_val_losses[f"lam_{lam}"] = []
     for seed in tqdm(range(N_SEEDS)):
         model = MegaForSequenceClassification.from_pretrained("mnaylor/mega-base-wikitext")
         model.classifier.out_proj = torch.nn.Linear(in_features=128, out_features=3, bias=True)
@@ -183,20 +232,22 @@ for lr in lr_rates:
 
         optimizer = AdamW(model.parameters(), lr=lr)
         scheduler = get_scheduler(name="polynomial", optimizer=optimizer, num_warmup_steps=1, num_training_steps=N_EPOCHS*len(train_dataloader))
-        train_acc, val_acc, train_losses, val_losses, best_epoch, _ = train(model, train_dataloader, test_dataloader, optimizer, scheduler,num_epochs=N_EPOCHS)
+        train_acc, val_acc, train_losses, val_losses, best_epoch, best_model = train(model, train_dataloader, test_dataloader, criterion, optimizer, scheduler, num_epochs=N_EPOCHS, seed = seed)
 
-        best_train_accs[lr].append(train_acc[best_epoch])
-        best_val_accs[lr].append(val_acc[best_epoch])
-        best_train_losses[lr].append(train_losses[best_epoch])
-        best_val_losses[lr].append(val_losses[best_epoch])
-        best_epochs[lr].append(best_epoch)
+        torch.save(best_model, f"model_{seed}_{lam}.pth")
 
-        all_train_accs[lr].append(train_acc)
-        all_train_losses[lr].append(train_losses)
-        all_val_accs[lr].append(val_acc)
-        all_val_losses[lr].append(val_losses)
+        best_train_accs[f"lam_{lam}"].append(train_acc[best_epoch])
+        best_val_accs[f"lam_{lam}"].append(val_acc[best_epoch])
+        best_train_losses[f"lam_{lam}"].append(train_losses[best_epoch])
+        best_val_losses[f"lam_{lam}"].append(val_losses[best_epoch])
+        best_epochs[f"lam_{lam}"].append(best_epoch)
+
+        all_train_accs[f"lam_{lam}"].append(train_acc)
+        all_train_losses[f"lam_{lam}"].append(train_losses)
+        all_val_accs[f"lam_{lam}"].append(val_acc)
+        all_val_losses[f"lam_{lam}"].append(val_losses)
 
 
 save_all = (best_train_accs, best_val_accs, best_train_losses, best_val_losses, best_epochs, all_train_accs, all_train_losses, all_val_accs, all_val_losses)
-with open(f"lrsave.obj", 'wb') as f:
+with open(f"confusion.obj", 'wb') as f:
     pickle.dump(save_all, f)
