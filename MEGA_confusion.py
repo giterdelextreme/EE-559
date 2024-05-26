@@ -18,6 +18,7 @@ def tokenize_func(examples):
     return tokenizer(
         examples["tweet"], padding="max_length", truncation=True
         )
+
 def train_epoch(model, train_dataloader, optimizer, lr_scheduler):
     progress_bar = tqdm(range(len(train_dataloader)))
     metric = evaluate.load("accuracy")

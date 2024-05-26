@@ -19,12 +19,13 @@ def tokenize_func(examples):
     return tokenizer(
         examples["tweet"], padding="max_length", truncation=True
         )
-def train_epoch(model, train_dataloader, optimizer, lr_scheduler):
+
+def train_epoch(model, train_dataloader, optimizer, criterion, lam, lr_scheduler):
     progress_bar = tqdm(range(len(train_dataloader)))
     metric = evaluate.load("accuracy")
     model.train()
     model.to(device)
-    criterion = torch.nn.CrossEntropyLoss()
+    #criterion = torch.nn.CrossEntropyLoss()
 
     epoch_loss = 0
     for batch in train_dataloader:
@@ -36,7 +37,8 @@ def train_epoch(model, train_dataloader, optimizer, lr_scheduler):
         outputs = model(input, attention_mask=mask)
         with torch.no_grad():
             _, preds = torch.max(outputs.logits, 1)
-        loss = criterion(outputs.logits, y)
+        #loss = criterion(outputs.logits, y)
+        loss = criterion(outputs.logits, y, lam)
 
         loss.backward()
         optimizer.step()
@@ -109,7 +111,6 @@ def train(model,
           patience=4,
           seed = 1):
 
-    # count epochs where the model didn't improve
     counter = 0
     best_val_acc = 0
     best_epoch = 0
@@ -125,7 +126,7 @@ def train(model,
         else:
             model.mega.requires_grad_(True)
         train_loss, train_acc = train_epoch(
-            model, train_dataloader, optimizer, lr_scheduler)
+            model, train_dataloader, optimizer, criterion, lam, lr_scheduler)
         val_loss, val_acc = eval(model, test_dataloader, criterion, lam, seed, epoch)
 
         print(f"Epoch {epoch+1} accuracy: train={train_acc:.3f}, test={val_acc:.3f}")
@@ -137,7 +138,6 @@ def train(model,
         val_losses.append(val_loss)
 
         # early stopping
-        # TODO: check if val_acc <= best_val_acc + some minimum increase
         if val_acc <= best_val_acc + 1e-4:
             counter += 1
             if counter >= patience:
@@ -199,10 +199,10 @@ tokenizer = AutoTokenizer.from_pretrained("mnaylor/mega-base-wikitext")
 criterion = custom_loss
 
 lr = 1e-4
-#lambdas = [1.5, 2, 5, 10]
-lambdas = 1
+lambdas = [1.5, 2, 5, 10]
+
 N_SEEDS = 5
-for lam in reversed(lambdas):
+for lam in lambdas:
     best_train_accs[f"lam_{lam}"] = []
     best_val_accs[f"lam_{lam}"] = []
     best_train_losses[f"lam_{lam}"] = []
