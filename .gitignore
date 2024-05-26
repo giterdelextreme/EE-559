@@ -8,3 +8,10 @@ __pycache__/
 env/
 venv/
 figures
+1_5/*
+matrix\ 2/*
+matrix\ picture/*
+tweet_paper/*
+test\ import/*
+Testing.ipynb
+data/labeled_data.p
